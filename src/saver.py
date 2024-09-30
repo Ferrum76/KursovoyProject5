@@ -1,152 +1,116 @@
-from .abstract_class import Saver
+from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional
-import json
-import os
+
+from django.db.models.expressions import result
+
+from .db_manager import DBManager
 
 
-class JSONSaver(Saver):
+class Saver(ABC):
     """
-    Реализация абстрактного класса Saver для сохранения данных в JSON файл.
+    Абстрактный класс Saver, определяющий интерфейс для сохранения данных.
     """
 
-    def __init__(self, path: str = 'data/vacancies.json'):
+    @abstractmethod
+    def save_company(self, data: Dict[str, Any]) -> None:
         """
-        Инициализирует экземпляр JSONSaver.
-
-        Args:
-            path (str, optional): Путь к JSON файлу для сохранения данных.
-                                  По умолчанию 'data/vacancies.json'.
-        """
-        self.__path = path
-        os.makedirs(os.path.dirname(self.__path), exist_ok=True)
-
-    def get_path(self) -> str:
-        """
-        Возвращает путь к JSON файлу.
-
-        Returns:
-            str: Путь к JSON файлу.
-        """
-        return self.__path
-
-    def save(self, data: Dict[str, Any]) -> None:
-        """
-        Сохраняет данные в JSON файл. Не добавляет дубликаты вакансий.
+        Сохраняет данные о компаниях в базу данных. Не добавляет дубликаты компаний.
 
         Args:
             data (Dict[str, Any]): Данные для сохранения.
-
-        Raises:
-            IOError: Если произошла ошибка при записи в файл.
         """
-        try:
-            existing_data = self.__load_existing_data()
-            new_items = data.get('items', [])
+        pass
 
-            # Избегаем дублирования вакансий по 'name' и 'url'
-            existing_items = { (item['name'], item['url']) for item in existing_data.get('items', []) }
-            unique_new_items = [item for item in new_items if (item['name'], item['url']) not in existing_items]
-
-            if unique_new_items:
-                existing_data.setdefault('items', []).extend(unique_new_items)
-                with open(self.__path, 'w', encoding='utf-8') as file:
-                    json.dump(existing_data, file, ensure_ascii=False, indent=4)
-
-
-        except IOError as e:
-            raise IOError(f'Ошибка при записи в {self.__path}: {e}')
-
-    def get_vacancies(self, criteria: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+    @abstractmethod
+    def save_vacancies(self, data: Dict[str, Any]) -> None:
         """
-        Получает вакансии из JSON файла по заданным критериям.
+        Сохраняет данные о вакансиях в базу данных. Не добавляет дубликаты вакансий.
 
         Args:
-            criteria (Optional[Dict[str, Any]], optional): Словарь с критериями фильтрации.
-                                                         По умолчанию None.
-
-        Returns:
-            List[Dict[str, Any]]: Список вакансий, соответствующих критериям.
+            data (Dict[str, Any]): Данные для сохранения.
         """
-        try:
-            data = self.__load_existing_data()
-            vacancies = data.get('items', [])
+        pass
 
-            if not criteria:
-                return vacancies
-
-            filtered = []
-            for vacancy in vacancies:
-                match = True
-                for key, value in criteria.items():
-                    if key == 'name' and value.lower() not in vacancy.get('name', '').lower():
-                        match = False
-                        break
-                    if key == 'salary_from' and (vacancy.get('salary_from') is None or vacancy.get('salary_from') < value):
-                        match = False
-                        break
-                    if key == 'salary_to' and (vacancy.get('salary_to') is None or vacancy.get('salary_to') > value):
-                        match = False
-                        break
-                if match:
-                    filtered.append(vacancy)
-
-            print(f'Найдено {len(filtered)} вакансий, соответствующих критериям.')
-            return filtered
-
-        except IOError as e:
-            raise IOError(f'Ошибка при чтении из {self.__path}: {e}')
-
-    def delete(self, record_id: Optional[str] = None) -> None:
+    @abstractmethod
+    def delete_company(self, company_id: int) -> None:
         """
-        Удаляет все вакансии или конкретную вакансию по идентификатору.
+        Удаляет компанию по идентификатору.
 
         Args:
-            record_id (Optional[str], optional): Идентификатор вакансии для удаления.
-                                                Если не указан, удаляются все вакансии.
-                                                По умолчанию None.
-
-        Raises:
-            IOError: Если произошла ошибка при удалении данных.
+            company_id (int): Идентификатор компании для удаления.
         """
-        try:
-            if not os.path.exists(self.__path):
-                return
+        pass
 
-            if record_id:
-                with open(self.__path, 'r', encoding='utf-8') as file:
-                    data = json.load(file)
-                original_length = len(data.get('items', []))
-                data['items'] = [item for item in data.get('items', []) if item.get('id') != record_id]
-                new_length = len(data['items'])
-                if new_length < original_length:
-                    with open(self.__path, 'w', encoding='utf-8') as file:
-                        json.dump(data, file, ensure_ascii=False, indent=4)
-                    print(f'Вакансия с id {record_id} удалена из {self.__path}.')
-                else:
-                    print(f'Вакансия с id {record_id} не найдена в {self.__path}.')
-            else:
-                # Удаление всех вакансий
-                with open(self.__path, 'w', encoding='utf-8') as file:
-                    json.dump({"items": []}, file, ensure_ascii=False, indent=4)
-                print(f'Все вакансии удалены из {self.__path}.')
-
-        except IOError as e:
-            raise IOError(f'Ошибка при удалении данных из {self.__path}: {e}')
-
-    def __load_existing_data(self) -> Dict[str, Any]:
+    @abstractmethod
+    def delete_vacancy(self, vacancy_id: int) -> None:
         """
-        Загружает существующие данные из JSON файла.
+        Удаляет вакансию по идентификатору.
 
-        Returns:
-            Dict[str, Any]: Данные из файла.
-
-        Raises:
-            IOError: Если произошла ошибка при чтении файла.
+        Args:
+            vacancy_id (int): Идентификатор вакансии для удаления.
         """
-        try:
-            if not os.path.exists(self.__path):
-                return {"items": []}
-            with open(self.__path, 'r', encoding='utf-8') as file:
-                return json.load(file)
-        except IOError as e:
-            raise IOError(f'Ошибка при чтении данных из {self.__path}: {e}')
+        pass
+
+
+class DBSaver(Saver):
+    """
+    Реализация абстрактного класса Saver для сохранения данных в базу данных PostgreSQL через DBManager.
+    """
+
+    def __init__(self, db_manager: DBManager):
+        """
+        Инициализирует экземпляр DBSaver с подключением к DBManager.
+
+        Args:
+            db_manager (DBManager): Экземпляр DBManager для работы с базой данных.
+        """
+        self.db_manager = db_manager
+
+    def save_company(self, company: Dict[str, Any]) -> int:
+        """
+        Сохраняет данные о компаниях в базу данных. Не добавляет дубликаты компаний.
+
+        Args:
+            data (Dict[str, Any]): Данные для сохранения.
+            :param company:
+        """
+        company_id = self.db_manager.insert_company(company)
+        return company_id
+
+
+    def save_vacancies(self, data: Dict[str, Any]) -> None:
+        """
+        Сохраняет данные о вакансиях в базу данных. Не добавляет дубликаты вакансий.
+
+        Args:
+            data (Dict[str, Any]): Данные для сохранения.
+        """
+        self.db_manager.insert_vacancy(data)
+
+    def delete_company(self, record_id: Optional[int] = None) -> None:
+        """
+        Удаляет компанию или все компании из базы данных.
+
+        Args:
+            record_id (Optional[int], optional): Идентификатор компании для удаления. Если не указан, удаляются все компании.
+        """
+        if record_id:
+            self.db_manager.delete_company(record_id)
+            print(f'Компания с идентификатором {record_id} удалена из базы данных.')
+        else:
+            self.db_manager.delete_all_companies()
+            print('Все компании удалены из базы данных.')
+
+    def delete_vacancy(self, record_id: Optional[int] = None) -> None:
+        """
+        Удаляет вакансию или все вакансии из базы данных.
+
+        Args:
+            record_id (Optional[int], optional): Идентификатор вакансии для удаления. Если не указан, удаляются все вакансии.
+        """
+        if record_id:
+            self.db_manager.delete_vacancy(record_id)
+            print(f'Вакансия с идентификатором {record_id} удалена из базы данных.')
+        else:
+            self.db_manager.delete_all_vacancies()
+            print('Все вакансии удалены из базы данных.')

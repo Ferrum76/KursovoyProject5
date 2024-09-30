@@ -1,10 +1,33 @@
-from .abstract_class import AbstractHH
+from abc import ABC, abstractmethod
 import requests
-from requests import Session, Response
 from typing import List, Dict, Any, Optional
 
-
 BASE_API_HH_URL = 'https://api.hh.ru/vacancies'
+
+
+class AbstractHH(ABC):
+    """
+    Абстрактный класс для подключения к API платформы с вакансиями.
+    """
+
+    @abstractmethod
+    def get_vacancies(self, keyword: str, max_pages: Optional[int] = None) -> List[Dict[str, Any]]:
+        """
+        Получает список вакансий из API на основе предоставленного ключевого слова.
+
+        Args:
+            keyword (str): Ключевое слово для поиска вакансий.
+            max_pages (Optional[int], optional): Максимальное количество страниц для получения.
+                                                 По умолчанию None (получить все доступные страницы).
+
+        Returns:
+            List[Dict[str, Any]]: Список вакансий, полученных из API.
+
+        Raises:
+            ValueError: Если ключевое слово пустое.
+            Exception: Если произошла ошибка при выполнении запроса.
+        """
+        pass
 
 
 class FromHHru(AbstractHH):
@@ -27,10 +50,7 @@ class FromHHru(AbstractHH):
         """
         self.__url_get = url_get
         self.__per_page = per_page
-        self.__session = Session()
-        self.__session.headers.update({
-            'User-Agent': 'VacancyParser/1.0 (contact@yourdomain.com)'  # Замените на имя вашего приложения и действительный email
-        })
+        self.__session = requests.Session()
 
     def __repr__(self) -> str:
         """
@@ -71,7 +91,7 @@ class FromHHru(AbstractHH):
                 'per_page': self.__per_page
             }
             try:
-                response: Response = self.__session.get(self.__url_get, params=params, timeout=10)
+                response: requests.Response = self.__session.get(self.__url_get, params=params, timeout=10)
                 response.raise_for_status()
             except requests.HTTPError as http_err:
                 raise http_err

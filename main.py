@@ -1,187 +1,151 @@
-from src.hh_api import FromHHru
-from src.parser_vacancy import ParserVacancy
-from src.saver import JSONSaver
-import src.utils as utils
+from types import NoneType
+
+import src.config as cfg
+import src.saver as db_saver
+import src.db_manager as db
+import src.hh_api as api
 
 
-def print_vacancies(vacancies: list) -> None:
-    """
-    Печатает список вакансий в удобочитаемом формате.
-
-    Args:
-        vacancies (list): Список вакансий для отображения.
-    """
-    if not vacancies:
-        print("Нет вакансий, соответствующих заданным критериям.")
-        return
-
-    for idx, vacancy in enumerate(vacancies, start=1):
-        print(f"\n{idx}. {vacancy['name']}")
-        print(f"   Описание: {vacancy['desc']}")
-        if vacancy.get('salary_from') or vacancy.get('salary_to'):
-            salary = vacancy.get('salary_from')
-            salary_to = vacancy.get('salary_to')
-            currency = vacancy.get('currency', 'RUB')
-            if salary and salary_to:
-                print(f"   Зарплата: {salary} - {salary_to} {currency}")
-            elif salary:
-                print(f"   Зарплата: От {salary} {currency}")
-            elif salary_to:
-                print(f"   Зарплата: До {salary_to} {currency}")
-        else:
-            print("   Зарплата: Не указана")
-        print(f"   Требования: {vacancy.get('requirement')}")
-        print(f"   Ссылка: {vacancy.get('url')}")
-
-
-def interface() -> None:
+def interface(config: cfg.Config) -> None:
     """
     Функция для взаимодействия с пользователем через консоль.
     Позволяет искать вакансии, применять фильтры и сохранять результаты.
     """
     print('Добро пожаловать в интерактивный поиск вакансий на сайте hh.ru')
 
+    # Получаем параметры базы данных из конфигурации
+    db_params = config.get_db()
+    db_params['dbname'] = db_params.pop('name')  # Преобразуем ключ 'name' в 'dbname' для psycopg2
+
+    # Создаем экземпляр DBManager
+    db_manager = db.DBManager(db_params)
+
+    # Создаем экземпляр Saver
+    saver = db_saver.DBSaver(db_manager)
+
+    # Получаем список компаний из конфигурации
+    company_names = config.get_company_names()
+
+    # Создаем экземпляр для работы с API hh.ru
+    hh_api = api.FromHHru()
+
     while True:
-        try:
-            cmd = input(utils.menu()).strip().lower()
+        print("\nВыберите действие:")
+        print("1 - Загрузить вакансии в базу данных")
+        print("2 - Показать компании и количество вакансий")
+        print("3 - Показать все вакансии")
+        print("4 - Показать среднюю зарплату по вакансиям")
+        print("5 - Показать вакансии с зарплатой выше средней")
+        print("6 - Поиск вакансий по ключевому слову")
+        print("7 - Удалить все вакансии")
+        print("8 - Удалить все компании")
+        print("9 - Выход")
 
-            if cmd in ['help', '1']:
-                print('Вызов списка команд.')
-                print(utils.menu())
+        choice = input("Введите номер действия: ")
+
+        if choice == '1':
+            # Загружаем данные о вакансиях и сохраняем в базу данных
+            for company_name in company_names:
+                print(f"\nЗагружаем вакансии для компании: {company_name}")
+                try:
+                    vacancies = hh_api.get_vacancies(company_name)
+                    if vacancies:
+                        # Добавляем информацию о компании в базу данных
+                        company_data = {
+                            'name': company_name,
+                            'url': None,
+                            'description': None
+                        }
+                        company_id = saver.save_company(company_data)
+
+                        # Обрабатываем вакансии и добавляем company_id
+                        for vacancy in vacancies:
+                            try:
+                                vacancy_data = {
+                                    'company_id': company_id,
+                                    'title': vacancy.get('name', 'вакансия без названия'),
+                                    'url': vacancy.get('url', 'alternate_url'),
+                                    'description': vacancy.get('snippet', {}).get('responsibility', '')
+                                }
+                                if vacancy.get('salary', {}) is not None:
+                                    vacancy_data['salary_from'] = vacancy.get('salary', {}).get('from', 0)
+                                    vacancy_data['salary_to'] = vacancy.get('salary', {}).get('to', 0)
+                                else:
+                                    vacancy_data['salary_from'] = 0
+                                    vacancy_data['salary_to'] = 0
+
+                                # Добавляем вакансию в базу данных, если она новая
+                                saver.save_vacancies(vacancy_data)
+                            except Exception as e:
+                                print(f"Ошибка при обработке вакансии {vacancy}: {e}")
+                    else:
+                        print(f"Нет доступных вакансий для компании {company_name}")
+                except Exception as e:
+                    print(f"Ошибка при загрузке вакансий для компании {company_name}: {e}")
+        elif choice == '2':
+            companies = db_manager.get_companies_and_vacancies_count()
+            if not companies:
+                print("\nНет данных о компаниях и количестве вакансий.")
                 continue
-
-            elif cmd in ['search', '2']:
-                user_vacancy = input('Введите вакансию для поиска на сайте hh.ru: ').strip()
-                if not user_vacancy:
-                    continue
-
-                # Инициализация компонентов
-                hh = FromHHru()
-                vacancies_data = hh.get_vacancies(keyword=user_vacancy, max_pages=None)
-                hh.close_session()
-
-                pv = ParserVacancy(data=vacancies_data)
-                parse_vacancies = pv.parse_vacancies()
-
-                saver = JSONSaver(path='data/vacancies.json')
-                res = {"items": [vacancy.to_dict() for vacancy in parse_vacancies]}
-                saver.save(res)
-
-                print(f'Найдено: {len(parse_vacancies)} вакансий по запросу "{user_vacancy}" и сохранено в файл вакансий в {saver.get_path()}')
-
-                # Запрос на добавление фильтров
-                add_filters = input('Требуется ли добавить фильтры к вакансиям? (да/нет): ').strip().lower()
-                if add_filters == 'да':
-                    params = {}
-                    while True:
-                        sub_cmd = input(utils.get_info_commands_criteria()).strip().lower()
-
-                        if sub_cmd in ['stop', '11']:
-                            break
-
-                        elif sub_cmd in ['help', '1']:
-                            print(utils.get_info_commands_criteria())
-                            continue
-
-                        elif sub_cmd in ['name', '2']:
-                            name_vac = input('Введите название вакансии: ').strip()
-                            if name_vac and name_vac != '':
-                                params['name'] = name_vac
-                                print(f'Добавлен фильтр: {utils.PARAMS_ADDED["name"]} = {name_vac}')
-                            else:
-                                print('Название вакансии не может быть пустым.')
-
-                        elif sub_cmd in ['salary_from', '3']:
-                            salary_from = input('Введите зарплату от: ').strip()
-                            if salary_from.isdigit() and int(salary_from) >= 0:
-                                params['salary_from'] = int(salary_from)
-                                print(f'Добавлен фильтр: {utils.PARAMS_ADDED["salary_from"]} = {salary_from}')
-                            else:
-                                print('Зарплата от должна быть неотрицательным числом.')
-
-                        elif sub_cmd in ['salary_to', '4']:
-                            salary_to = input('Введите зарплату до: ').strip()
-                            if salary_to.isdigit() and int(salary_to) >= 0:
-                                params['salary_to'] = int(salary_to)
-                                print(f'Добавлен фильтр: {utils.PARAMS_ADDED["salary_to"]} = {salary_to}')
-                            else:
-                                print('Зарплата до должна быть неотрицательным числом.')
-
-                        elif sub_cmd in ['sorted_salary_from', '5']:
-                            params['sorted_salary_from'] = True
-                            print(f'Добавлен фильтр: {utils.PARAMS_ADDED["sorted_salary_from"]}')
-
-                        elif sub_cmd in ['sorted_salary_to', '6']:
-                            params['sorted_salary_to'] = True
-                            print(f'Добавлен фильтр: {utils.PARAMS_ADDED["sorted_salary_to"]}')
-
-                        elif sub_cmd in ['sorted_avg_salary_asc', '7']:
-                            params['sorted_avg_salary_asc'] = True
-                            print(f'Добавлен фильтр: {utils.PARAMS_ADDED["sorted_avg_salary_asc"]}')
-
-                        elif sub_cmd in ['sorted_avg_salary_desc', '8']:
-                            params['sorted_avg_salary_desc'] = True
-                            print(f'Добавлен фильтр: {utils.PARAMS_ADDED["sorted_avg_salary_desc"]}')
-
-                        elif sub_cmd in ['top_n', '9']:
-                            top_n = input('Введите топ N вакансий: ').strip()
-                            if top_n.isdigit() and int(top_n) > 0:
-                                params['top_n'] = int(top_n)
-                                print(f'Добавлен фильтр: {utils.PARAMS_ADDED["top_n"]} = {top_n}')
-                            else:
-                                print('Топ N вакансий должно быть положительным числом.')
-
-                        elif sub_cmd in ['add', '10']:
-                            if not params:
-                                print('Нет добавленных фильтров для применения.')
-                                continue
-                            parse_vacancies = pv.parse_vacancies(params=params)
-                            saver.delete()
-                            res['items'] = [vacancy.to_dict() for vacancy in parse_vacancies]
-                            saver.save(res)
-                            print(f'Фильтры применены. Найдено: {len(parse_vacancies)} вакансий и сохранено в файл вакансий в {saver.get_path()}')
-                            print('Фильтры добавлены и применены к вакансиям.')
-                            break
-
-                        elif sub_cmd in ['done', '11']:
-                            print('Применение текущих фильтров.')
-                            break
-
-                        elif sub_cmd in ['clear', '12']:
-                            params.clear()
-                            print('Фильтры очищены.')
-                            print('Фильтры очищены.')
-
-                        else:
-                            print('Неизвестная команда. Введите "help" для списка доступных команд.')
-
-                        # Отображение текущих добавленных фильтров
-                        if params:
-                            print(utils.get_params_info_commands_criteria(params))
-                        else:
-                            print('\tНет добавленных критериев.')
-
-
-
-                # Запрос на очистку файла вакансий
-                name_exit = input('Хотите очистить файл вакансий? (да/нет): ').strip().lower()
-                if name_exit in ['да', 'yes', 'y']:
-                    saver.delete()
-                    print('Файл вакансий очищен')
-                    print('Файл вакансий очищен.')
-
-            elif cmd in ['exit', '3']:
-                print('До свидания, спасибо за использование интерактивного поиска вакансий на сайте hh.ru')
-                print('Пользователь завершил работу программы.')
-                break
-
+            print("\nКомпании и количество вакансий:")
+            for company in companies:
+                print(f"Компания: {company['name']}, Количество вакансий: {company['vacancy_count']}")
+        elif choice == '3':
+            vacancies = db_manager.get_all_vacancies()
+            print("\nСписок всех вакансий:")
+            for vacancy in vacancies:
+                salary_from = vacancy['salary_from'] or 'не указано'
+                salary_to = vacancy['salary_to'] or 'не указано'
+                print(f"Компания: {vacancy['company_name']}, Вакансия: {vacancy['title']}, "
+                      f"Зарплата: от {salary_from} до {salary_to}, Ссылка: {vacancy['url']}")
+        elif choice == '4':
+            avg_salary = db_manager.get_avg_salary()
+            if avg_salary:
+                print(f"\nСредняя зарплата по вакансиям: {avg_salary:.2f}")
             else:
-                print('Неизвестная команда. Введите "help" для списка доступных команд.')
-                print('Неизвестная команда. Введите "help" для списка доступных команд.')
-
-        except Exception as e:
-            print(f'Произошла ошибка: {e}')
-
+                print("\nДанные о зарплатах отсутствуют.")
+        elif choice == '5':
+            vacancies = db_manager.get_vacancies_with_higher_salary()
+            if vacancies:
+                print("\nВакансии с зарплатой выше средней:")
+                for vacancy in vacancies:
+                    salary_from = vacancy['salary_from'] or 'не указано'
+                    salary_to = vacancy['salary_to'] or 'не указано'
+                    print(f"Компания: {vacancy['company_name']}, Вакансия: {vacancy['title']}, "
+                          f"Зарплата: от {salary_from} до {salary_to}, Ссылка: {vacancy['url']}")
+            else:
+                print("\nНет вакансий с зарплатой выше средней или данные о зарплатах отсутствуют.")
+        elif choice == '6':
+            keyword = input("Введите ключевое слово для поиска: ")
+            vacancies = db_manager.get_vacancies_with_keyword(keyword)
+            if vacancies:
+                print(f"\nВакансии, содержащие '{keyword}':")
+                for vacancy in vacancies:
+                    print(f"Компания: {vacancy['company_name']}, Вакансия: {vacancy['title']}, Ссылка: {vacancy['url']}")
+            else:
+                print(f"\nНет вакансий, содержащих '{keyword}'.")
+        elif choice == '7':
+            confirmation = input("Вы уверены, что хотите удалить все вакансии? (да/нет): ")
+            if confirmation.lower() == 'да' or confirmation.lower() == 'yes' or confirmation.lower() == 'y':
+                saver.delete_vacancy()
+                print("Все вакансии удалены.")
+            else:
+                print("Удаление вакансий отменено.")
+        elif choice == '8':
+            confirmation = input("Вы уверены, что хотите удалить все компании и связанные с ними вакансии? (да/нет): ")
+            if confirmation.lower() == 'да' or confirmation.lower() == 'yes' or confirmation.lower() == 'y':
+                saver.delete_company()
+                print("Все компании и связанные вакансии удалены.")
+            else:
+                print("Удаление компаний отменено.")
+        elif choice == '9':
+            print("\nСпасибо за использование программы. До свидания!")
+            db_manager.close()
+            hh_api.close_session()
+            break
+        else:
+            print("\nНеверный выбор. Пожалуйста, выберите действующий пункт меню.")
 
 if __name__ == "__main__":
-    interface()
+    cfg = cfg.Config()
+    interface(cfg)
